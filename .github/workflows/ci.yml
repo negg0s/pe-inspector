@@ -23,3 +23,5 @@ jobs:
           pip install -e ".[dev]"
       - name: Run tests
         run: pytest -q
+      - name: Check documentation text
+        run: python tools/check_text.py README.md
