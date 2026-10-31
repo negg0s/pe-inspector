@@ -455,6 +455,7 @@ def get_signature(path):
     result = {
         "present": False,
         "valid": False,
+        "validation_performed": False,
         "offset": None,
         "size": 0,
         "certificate_length": None,
@@ -584,7 +585,37 @@ def generate_report(path, fmt="text"):
     sections = get_sections(path)
     imports = get_imports(path)
     entropy = get_entropy(path)
+    signature = get_signature(path)
+    scan_result = scan(path)
     suspicious = [i for i in imports if i["suspicious"]]
+
+    explanations = {
+        "wx_section": lambda reason: (
+            "Section %s is writable and executable, so it can be changed while "
+            "also containing code. Some legitimate programs do this." % reason["detail"].split(" ")[1]
+        ),
+        "high_entropy": lambda reason: (
+            "%s is unusually dense or encoded. Compression and installers can "
+            "also cause this." % reason["detail"].split(" ")[1]
+        ),
+        "suspicious_imports": lambda reason: (
+            "The program uses APIs that can be used to inspect or control other "
+            "programs. This can also be normal for system tools and debuggers."
+        ),
+        "no_aslr": lambda reason: (
+            "The file does not request ASLR, a Windows feature that randomizes "
+            "where program code is loaded. Older software may lack this."
+        ),
+        "no_dep": lambda reason: (
+            "The file does not request DEP, a Windows feature that helps stop "
+            "data from being run as code. Older software may lack this."
+        ),
+        "overlay": lambda reason: (
+            "There is extra data after the program's sections. This can be "
+            "legitimate, but its purpose is not clear from this check."
+        ),
+    }
+    what_this_means = [explanations[item["id"]](item) for item in scan_result["reasons"]]
 
     if fmt == "json":
         import json
@@ -595,62 +626,52 @@ def generate_report(path, fmt="text"):
             "imports": imports,
             "entropy": entropy,
             "suspicious_imports": suspicious,
+            "signature": signature,
+            "scan": scan_result,
+            "what_this_means": what_this_means,
         }
         return json.dumps(payload, indent=2)
 
-    if fmt == "markdown":
-        lines = []
-        lines.append("# PE Report: %s" % os.path.basename(path))
-        lines.append("")
-        lines.append("## Info")
-        for k, v in info.items():
-            lines.append("- **%s**: %s" % (k, v))
-        lines.append("")
-        lines.append("## Sections")
-        lines.append("| Name | VirtualSize | RawSize | Entropy |")
-        lines.append("|---|---|---|---|")
-        for s in sections:
-            lines.append("| %s | %s | %s | %s |" % (s["name"], s["virtual_size"], s["raw_size"], s["entropy"]))
-        lines.append("")
-        lines.append("## Imports (%d)" % len(imports))
-        for i in imports:
-            flag = " [SUSPICIOUS]" if i["suspicious"] else ""
-            lines.append("- %s!%s%s" % (i["dll"], i["name"], flag))
-        lines.append("")
-        lines.append("## Entropy")
-        lines.append("- File entropy: %s" % entropy["file_entropy"])
-        for s in entropy["sections"]:
-            lines.append("- %s: %s" % (s["name"], s["entropy"]))
-        if suspicious:
-            lines.append("")
-            lines.append("## Suspicious Imports")
-            for i in suspicious:
-                lines.append("- %s!%s" % (i["dll"], i["name"]))
-        return "\n".join(lines)
-
-    lines = []
-    lines.append("PE Report: %s" % path)
-    lines.append("=" * 60)
-    lines.append("INFO")
-    for k, v in info.items():
-        lines.append("  %s: %s" % (k, v))
-    lines.append("")
-    lines.append("SECTIONS")
-    for s in sections:
-        lines.append("  %-12s VA=%-10s VS=%-8s Raw=%-8s Entropy=%s" % (s["name"], s["virtual_address"], s["virtual_size"], s["raw_size"], s["entropy"]))
-    lines.append("")
-    lines.append("IMPORTS (%d)" % len(imports))
-    for i in imports:
-        flag = " [SUSPICIOUS]" if i["suspicious"] else ""
-        lines.append("  %s!%s%s" % (i["dll"], i["name"], flag))
-    lines.append("")
-    lines.append("ENTROPY")
-    lines.append("  file: %s" % entropy["file_entropy"])
-    for s in entropy["sections"]:
-        lines.append("  %s: %s" % (s["name"], s["entropy"]))
+    lines = [
+        "EXE check: %s" % os.path.basename(path),
+        "=" * 60,
+        "What this means",
+        "This is a static check. The file was read, not run.",
+        "Heuristics are not antivirus and cannot tell you whether a file is safe.",
+        "A matching indicator is not proof that a file is malicious.",
+        "",
+        "Heuristic indicator score: %s/100 (%s)" % (scan_result["score"], scan_result["level"]),
+        "This is a count of selected clues, not a probability or safety rating.",
+    ]
+    if what_this_means:
+        lines.extend("- " + explanation for explanation in what_this_means)
+    else:
+        lines.append("No selected indicators matched. That does not prove the file is safe.")
+    architecture = {
+        "i386": "x86",
+        "AMD64": "x64",
+        "ARM": "ARM",
+        "ARM64": "ARM64",
+    }.get(info["machine"], "unknown architecture")
+    bitness = 64 if info["machine"] in ("AMD64", "ARM64") else 32
+    lines.extend([
+        "",
+        "Signature: %s" % ("Present" if signature["present"] else "Not found"),
+        "Signature presence does not mean the signature is valid. Signature validity was not checked.",
+        "",
+        "File details",
+        "  Name: %s" % os.path.basename(path),
+        "  Size: %s bytes" % info["size"],
+        "  Type: %s-bit %s Windows file" % (bitness, architecture),
+        "  SHA-256: %s" % info["sha256"],
+        "",
+        "Technical details",
+        "  Sections: %s" % len(sections),
+        "  Imported functions: %s" % len(imports),
+        "  File entropy: %s" % entropy["file_entropy"],
+    ])
     if suspicious:
-        lines.append("")
-        lines.append("SUSPICIOUS IMPORTS (%d)" % len(suspicious))
-        for i in suspicious:
-            lines.append("  %s!%s" % (i["dll"], i["name"]))
+        lines.append("  Flagged imports: " + ", ".join(sorted({i["name"] for i in suspicious})))
+    if fmt == "markdown":
+        return "\n".join(["# " + lines[0], ""] + ["## " + line if line in ("What this means", "File details", "Technical details") else line for line in lines[2:]])
     return "\n".join(lines)

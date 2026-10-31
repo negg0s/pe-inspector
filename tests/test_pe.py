@@ -1,4 +1,5 @@
 import json
+import gc
 import os
 import subprocess
 import sys
@@ -121,6 +122,7 @@ def test_get_signature(signature_pe, minimal_pe):
     data = core.get_signature(signature_pe)
     assert data["present"] is True
     assert data["valid"] is False
+    assert data["validation_performed"] is False
     assert data["certificate_type"] == "PKCS_SIGNED_DATA"
     assert data["revision"] == "0x200"
     assert data["offset"] % 8 == 0
@@ -286,6 +288,45 @@ def test_cli_report_formats(minimal_pe):
         assert res.exit_code == 0, res.output
     res = runner.invoke(cli.cli, ["report", minimal_pe, "--format", "json"])
     json.loads(res.output)
+
+
+def test_report_text_explains_findings_and_signature_limits(risky_pe):
+    report = core.generate_report(risky_pe)
+    assert "What this means" in report
+    assert "not antivirus" in report.lower()
+    assert "not proof that a file is malicious" in report.lower()
+    assert "writable and executable" in report
+    assert "Signature: Not found" in report
+    assert "signature presence does not mean the signature is valid" in report.lower()
+
+
+def test_report_signature_present_is_not_validation(signature_pe):
+    report = core.generate_report(signature_pe)
+    assert "Signature: Present" in report
+    assert "validity was not checked" in report.lower()
+
+
+def test_report_json_preserves_fields_and_adds_context(minimal_pe):
+    payload = json.loads(core.generate_report(minimal_pe, fmt="json"))
+    assert {"info", "sections", "imports", "entropy", "suspicious_imports"} <= set(payload)
+    assert payload["signature"]["present"] is False
+    assert payload["signature"]["validation_performed"] is False
+    assert payload["scan"]["score"] == 0
+
+
+def test_cli_report_accepts_path_with_spaces(minimal_pe):
+    path_with_spaces = "D:/temp/pe-inspector/tests/curious user's copy.exe"
+    with open(minimal_pe, "rb") as source, open(path_with_spaces, "wb") as target:
+        target.write(source.read())
+    try:
+        result = CliRunner().invoke(cli.cli, ["report", path_with_spaces])
+        assert result.exit_code == 0, result.output
+        assert "What this means" in result.output
+        assert "Signature: Not found" in result.output
+        assert "Type: 32-bit x86 Windows file" in result.output
+    finally:
+        gc.collect()
+        os.remove(path_with_spaces)
 
 
 def test_cli_help():
