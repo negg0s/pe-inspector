@@ -491,6 +491,65 @@ def get_signature(path):
     return result
 
 
+def get_mitigations(path):
+    pe = load_pe(path)
+    oh = pe.OPTIONAL_HEADER
+    fh = pe.FILE_HEADER
+    dll_chars = getattr(oh, "DllCharacteristics", 0)
+
+    is_64bit = pe.PE_TYPE == pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS
+    aslr = bool(dll_chars & 0x0040)
+    high_entropy_va = bool(dll_chars & 0x0020) if is_64bit else False
+    relocs_stripped = bool(fh.Characteristics & 0x0001)
+
+    dep = bool(dll_chars & 0x0100)
+    guard_cf = bool(dll_chars & 0x4000)
+
+    cfg_instrumented = False
+    cfg_function_table = False
+    safeseh_present = False
+
+    load_config = getattr(pe, "DIRECTORY_ENTRY_LOAD_CONFIG", None)
+    if load_config is not None:
+        lc_struct = getattr(load_config, "struct", None)
+        if lc_struct:
+            guard_flags = getattr(lc_struct, "GuardFlags", 0)
+            if guard_flags:
+                cfg_instrumented = bool(guard_flags & 0x00000100)
+                cfg_function_table = bool(guard_flags & 0x00000400)
+            if not is_64bit:
+                se_table = getattr(lc_struct, "SEHandlerTable", 0)
+                se_count = getattr(lc_struct, "SEHandlerCount", 0)
+                if se_table != 0 or se_count != 0:
+                    safeseh_present = True
+
+    if not is_64bit:
+        if bool(dll_chars & 0x0400):
+            safeseh = "no_seh"
+        elif safeseh_present:
+            safeseh = "present"
+        else:
+            safeseh = "missing"
+    else:
+        safeseh = "not_applicable_x64"
+
+    sig = get_signature(path)
+
+    return {
+        "file": os.path.abspath(path),
+        "is_64bit": is_64bit,
+        "aslr": aslr and not relocs_stripped,
+        "high_entropy_va": high_entropy_va,
+        "dep": dep,
+        "cfg": guard_cf or cfg_instrumented,
+        "safeseh": safeseh,
+        "force_integrity": bool(dll_chars & 0x0080),
+        "isolation": not bool(dll_chars & 0x0200),
+        "authenticode": sig["present"],
+        "appcontainer": bool(dll_chars & 0x1000),
+    }
+
+
 def scan(path):
     pe = load_pe(path)
     reasons = []
@@ -586,6 +645,7 @@ def generate_report(path, fmt="text"):
     imports = get_imports(path)
     entropy = get_entropy(path)
     signature = get_signature(path)
+    mitigations = get_mitigations(path)
     scan_result = scan(path)
     suspicious = [i for i in imports if i["suspicious"]]
 
@@ -627,6 +687,7 @@ def generate_report(path, fmt="text"):
             "entropy": entropy,
             "suspicious_imports": suspicious,
             "signature": signature,
+            "mitigations": mitigations,
             "scan": scan_result,
             "what_this_means": what_this_means,
         }

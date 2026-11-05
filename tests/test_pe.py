@@ -365,3 +365,29 @@ def test_missing_file():
     runner = CliRunner()
     res = runner.invoke(cli.cli, ["info", "D:/temp/pe-inspector/nonexistent.exe"])
     assert res.exit_code != 0
+
+
+def test_get_mitigations(hardened_pe):
+    data = core.get_mitigations(hardened_pe)
+    assert data["aslr"] is True
+    assert data["dep"] is True
+    assert data["is_64bit"] is False
+    assert "safeseh" in data
+
+
+def test_cli_mitigations(hardened_pe):
+    runner = CliRunner()
+    res = runner.invoke(cli.cli, ["mitigations", hardened_pe])
+    assert res.exit_code == 0
+    assert "aslr:             yes" in res.output
+    assert "dep:              yes" in res.output
+
+
+def test_cli_mitigations_json(hardened_pe):
+    runner = CliRunner()
+    res = runner.invoke(cli.cli, ["mitigations", hardened_pe, "--json"])
+    assert res.exit_code == 0
+    payload = json.loads(res.output)
+    assert payload["aslr"] is True
+    assert payload["dep"] is True
+

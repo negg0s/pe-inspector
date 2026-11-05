@@ -210,6 +210,26 @@ def signature(file, as_json):
 @cli.command()
 @_file_argument()
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+def mitigations(file, as_json):
+    """Show exploit mitigation flags (ASLR, DEP, CFG, SafeSEH, etc.)."""
+    data = core.get_mitigations(file)
+    if as_json:
+        _json(data)
+        return
+    click.echo(f"aslr:             {'yes' if data['aslr'] else 'no'}")
+    click.echo(f"high_entropy_va:  {'yes' if data['high_entropy_va'] else 'no'}")
+    click.echo(f"dep:              {'yes' if data['dep'] else 'no'}")
+    click.echo(f"cfg:              {'yes' if data['cfg'] else 'no'}")
+    click.echo(f"safeseh:          {data['safeseh']}")
+    click.echo(f"force_integrity:  {'yes' if data['force_integrity'] else 'no'}")
+    click.echo(f"isolation:        {'yes' if data['isolation'] else 'no'}")
+    click.echo(f"authenticode:     {'yes' if data['authenticode'] else 'no'}")
+    click.echo(f"appcontainer:     {'yes' if data['appcontainer'] else 'no'}")
+
+
+@cli.command()
+@_file_argument()
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 def scan(file, as_json):
     """Score a PE file using simple static risk indicators."""
     data = core.scan(file)
