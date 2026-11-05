@@ -230,6 +230,26 @@ def mitigations(file, as_json):
 @cli.command()
 @_file_argument()
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+def tls(file, as_json):
+    """Show Thread Local Storage (TLS) directory and callbacks."""
+    data = core.get_tls(file)
+    if as_json:
+        _json(data)
+        return
+    click.echo(f"present:          {'yes' if data['present'] else 'no'}")
+    if data["present"]:
+        click.echo(f"start_address:    {data['start_address']}")
+        click.echo(f"end_address:      {data['end_address']}")
+        click.echo(f"callbacks_count:  {data['callbacks_count']}")
+        if data["callbacks"]:
+            click.echo("callbacks:")
+            for cb in data["callbacks"]:
+                click.echo(f"  - {cb}")
+
+
+@cli.command()
+@_file_argument()
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 def scan(file, as_json):
     """Score a PE file using simple static risk indicators."""
     data = core.scan(file)

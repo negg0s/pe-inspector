@@ -391,3 +391,26 @@ def test_cli_mitigations_json(hardened_pe):
     assert payload["aslr"] is True
     assert payload["dep"] is True
 
+
+def test_get_tls(minimal_pe):
+    data = core.get_tls(minimal_pe)
+    assert data["present"] is False
+    assert data["callbacks"] == []
+    assert data["callbacks_count"] == 0
+
+
+def test_cli_tls(minimal_pe):
+    runner = CliRunner()
+    res = runner.invoke(cli.cli, ["tls", minimal_pe])
+    assert res.exit_code == 0
+    assert "present:          no" in res.output
+
+
+def test_cli_tls_json(minimal_pe):
+    runner = CliRunner()
+    res = runner.invoke(cli.cli, ["tls", minimal_pe, "--json"])
+    assert res.exit_code == 0
+    payload = json.loads(res.output)
+    assert payload["present"] is False
+    assert payload["callbacks_count"] == 0
+

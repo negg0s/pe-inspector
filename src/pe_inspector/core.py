@@ -550,6 +550,29 @@ def get_mitigations(path):
     }
 
 
+def get_tls(path):
+    pe = load_pe(path)
+    if not hasattr(pe, "DIRECTORY_ENTRY_TLS") or pe.DIRECTORY_ENTRY_TLS is None:
+        return {
+            "present": False,
+            "start_address": None,
+            "end_address": None,
+            "callbacks": [],
+            "callbacks_count": 0,
+        }
+    tls = pe.DIRECTORY_ENTRY_TLS
+    tls_struct = tls.struct
+    raw_callbacks = getattr(tls, "callbacks", None) or []
+    callbacks = [hex(cb) for cb in raw_callbacks if cb != 0]
+    return {
+        "present": True,
+        "start_address": hex(tls_struct.StartAddressOfRawData),
+        "end_address": hex(tls_struct.EndAddressOfRawData),
+        "callbacks": callbacks,
+        "callbacks_count": len(callbacks),
+    }
+
+
 def scan(path):
     pe = load_pe(path)
     reasons = []
@@ -646,6 +669,7 @@ def generate_report(path, fmt="text"):
     entropy = get_entropy(path)
     signature = get_signature(path)
     mitigations = get_mitigations(path)
+    tls_info = get_tls(path)
     scan_result = scan(path)
     suspicious = [i for i in imports if i["suspicious"]]
 
@@ -688,6 +712,7 @@ def generate_report(path, fmt="text"):
             "suspicious_imports": suspicious,
             "signature": signature,
             "mitigations": mitigations,
+            "tls": tls_info,
             "scan": scan_result,
             "what_this_means": what_this_means,
         }
@@ -729,6 +754,7 @@ def generate_report(path, fmt="text"):
         "Technical details",
         "  Sections: %s" % len(sections),
         "  Imported functions: %s" % len(imports),
+        "  TLS callbacks: %s" % (len(tls_info["callbacks"]) if tls_info["present"] else "none"),
         "  File entropy: %s" % entropy["file_entropy"],
     ])
     if suspicious:
