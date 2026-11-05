@@ -227,9 +227,13 @@ def scan(file, as_json):
 
 @cli.command()
 @_file_argument()
-def entropy(file):
+@click.option("--json", "as_json", is_flag=True, help="Output JSON.")
+def entropy(file, as_json):
     """Show entropy information for a PE file."""
     data = core.get_entropy(file)
+    if as_json:
+        _json(data)
+        return
     click.echo(f"file_entropy: {data['file_entropy']}")
     for s in data["sections"]:
         click.echo(f"{s['name']}: {s['entropy']}")

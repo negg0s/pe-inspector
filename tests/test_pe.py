@@ -281,6 +281,15 @@ def test_cli_entropy(minimal_pe):
     assert "file_entropy:" in res.output
 
 
+def test_cli_entropy_json(minimal_pe):
+    runner = CliRunner()
+    res = runner.invoke(cli.cli, ["entropy", minimal_pe, "--json"])
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output)
+    assert "file_entropy" in payload
+    assert "sections" in payload
+
+
 def test_cli_report_formats(minimal_pe):
     runner = CliRunner()
     for fmt in ("text", "json", "markdown"):
