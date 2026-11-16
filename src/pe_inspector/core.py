@@ -541,7 +541,7 @@ def get_mitigations(path):
         "aslr": aslr and not relocs_stripped,
         "high_entropy_va": high_entropy_va,
         "dep": dep,
-        "cfg": guard_cf or cfg_instrumented,
+        "cfg": guard_cf or cfg_instrumented or cfg_function_table,
         "safeseh": safeseh,
         "force_integrity": bool(dll_chars & 0x0080),
         "isolation": not bool(dll_chars & 0x0200),
