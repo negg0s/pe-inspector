@@ -253,18 +253,27 @@ def get_headers(path):
 def get_sections(path):
     pe = load_pe(path)
     out = []
-    for sec in pe.sections:
+    for sec in getattr(pe, "sections", []):
+        virtual_size = getattr(sec, "Misc_VirtualSize", 0)
+        virtual_address = getattr(sec, "VirtualAddress", 0)
+        raw_size = getattr(sec, "SizeOfRawData", 0)
+        raw_offset = getattr(sec, "PointerToRawData", 0)
+        characteristics = getattr(sec, "Characteristics", 0)
+        try:
+            entropy = round(sec.get_entropy(), 4)
+        except Exception:
+            entropy = 0.0
         out.append(
             {
                 "name": _section_name(sec),
-                "virtual_size": sec.Misc_VirtualSize,
-                "virtual_address": hex(sec.VirtualAddress),
-                "raw_size": sec.SizeOfRawData,
-                "raw_offset": sec.PointerToRawData,
-                "entropy": round(sec.get_entropy(), 4),
-                "characteristics": hex(sec.Characteristics),
-                "writable": bool(sec.Characteristics & SCN_MEM_WRITE),
-                "executable": bool(sec.Characteristics & SCN_MEM_EXECUTE),
+                "virtual_size": virtual_size,
+                "virtual_address": hex(virtual_address) if isinstance(virtual_address, int) else None,
+                "raw_size": raw_size,
+                "raw_offset": raw_offset,
+                "entropy": entropy,
+                "characteristics": hex(characteristics) if isinstance(characteristics, int) else None,
+                "writable": bool(characteristics & SCN_MEM_WRITE),
+                "executable": bool(characteristics & SCN_MEM_EXECUTE),
             }
         )
     return out
@@ -275,17 +284,31 @@ def get_imports(path, suspicious=False):
     out = []
     if not hasattr(pe, "DIRECTORY_ENTRY_IMPORT"):
         return out
-    for entry in pe.DIRECTORY_ENTRY_IMPORT:
-        dll = _decode(entry.dll)
-        for imp in entry.imports:
-            if imp.name is not None:
+    entries = getattr(pe, "DIRECTORY_ENTRY_IMPORT", None)
+    if not entries:
+        return out
+    for entry in entries:
+        if entry is None:
+            continue
+        dll = _decode(getattr(entry, "dll", None))
+        imports = getattr(entry, "imports", None) or []
+        for imp in imports:
+            if imp is None:
+                continue
+            if getattr(imp, "name", None) is not None:
                 name = _decode(imp.name)
+            elif getattr(imp, "ordinal", None) is not None:
+                try:
+                    name = "ordinal_%d" % imp.ordinal
+                except (TypeError, ValueError):
+                    name = "ordinal_unknown"
             else:
-                name = "ordinal_%d" % imp.ordinal
+                name = "unknown"
+            addr = getattr(imp, "address", None)
             rec = {
                 "dll": dll,
                 "name": name,
-                "address": hex(imp.address) if getattr(imp, "address", None) is not None else None,
+                "address": hex(addr) if isinstance(addr, int) else None,
                 "suspicious": name in SUSPICIOUS_IMPORTS,
             }
             if suspicious and not rec["suspicious"]:
@@ -301,13 +324,17 @@ def get_exports(path):
     if directory is None:
         return result
     result["dll_name"] = _decode(getattr(directory, "name", None))
-    for sym in directory.symbols:
+    symbols = getattr(directory, "symbols", None) or []
+    for sym in symbols:
+        if sym is None:
+            continue
+        addr = getattr(sym, "address", None)
         result["exports"].append(
             {
-                "name": _decode(sym.name) if sym.name else None,
-                "ordinal": sym.ordinal,
-                "rva": hex(sym.address),
-                "forwarder": _decode(sym.forwarder) if sym.forwarder else None,
+                "name": _decode(sym.name) if getattr(sym, "name", None) else None,
+                "ordinal": getattr(sym, "ordinal", None),
+                "rva": hex(addr) if isinstance(addr, int) else None,
+                "forwarder": _decode(sym.forwarder) if getattr(sym, "forwarder", None) else None,
             }
         )
     return result
@@ -423,9 +450,48 @@ def get_entropy(path):
 
 def get_overlay(path):
     pe = load_pe(path)
-    offset = pe.get_overlay_data_start_offset()
     size = os.path.getsize(path)
-    if offset is None or offset >= size:
+    if size == 0:
+        return {
+            "present": False,
+            "offset": None,
+            "size": 0,
+            "percent": 0.0,
+            "contains_signature": False,
+        }
+
+    headers_end = getattr(pe.OPTIONAL_HEADER, "SizeOfHeaders", 0) if hasattr(pe, "OPTIONAL_HEADER") else 0
+    expected_end = headers_end
+
+    for sec in getattr(pe, "sections", []):
+        raw_size = getattr(sec, "SizeOfRawData", 0)
+        raw_offset = getattr(sec, "PointerToRawData", 0)
+        if raw_size > 0 and raw_offset > 0:
+            sec_end = raw_offset + raw_size
+            if sec_end > size or raw_offset > size:
+                return {
+                    "present": False,
+                    "offset": None,
+                    "size": 0,
+                    "percent": 0.0,
+                    "contains_signature": False,
+                }
+            if sec_end > expected_end:
+                expected_end = sec_end
+
+    try:
+        pe_offset = pe.get_overlay_data_start_offset()
+    except Exception:
+        pe_offset = None
+
+    if pe_offset is not None and pe_offset >= expected_end:
+        offset = pe_offset
+    elif size > expected_end:
+        offset = expected_end
+    else:
+        offset = None
+
+    if offset is None or offset >= size or offset < 0:
         return {
             "present": False,
             "offset": None,
@@ -561,13 +627,23 @@ def get_tls(path):
             "callbacks_count": 0,
         }
     tls = pe.DIRECTORY_ENTRY_TLS
-    tls_struct = tls.struct
+    tls_struct = getattr(tls, "struct", None)
+    if tls_struct is None:
+        return {
+            "present": True,
+            "start_address": None,
+            "end_address": None,
+            "callbacks": [],
+            "callbacks_count": 0,
+        }
     raw_callbacks = getattr(tls, "callbacks", None) or []
-    callbacks = [hex(cb) for cb in raw_callbacks if cb != 0]
+    callbacks = [hex(cb) for cb in raw_callbacks if isinstance(cb, int) and cb != 0]
+    start_addr = getattr(tls_struct, "StartAddressOfRawData", None)
+    end_addr = getattr(tls_struct, "EndAddressOfRawData", None)
     return {
         "present": True,
-        "start_address": hex(tls_struct.StartAddressOfRawData),
-        "end_address": hex(tls_struct.EndAddressOfRawData),
+        "start_address": hex(start_addr) if isinstance(start_addr, int) else None,
+        "end_address": hex(end_addr) if isinstance(end_addr, int) else None,
         "callbacks": callbacks,
         "callbacks_count": len(callbacks),
     }

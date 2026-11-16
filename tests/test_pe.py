@@ -414,3 +414,91 @@ def test_cli_tls_json(minimal_pe):
     assert payload["present"] is False
     assert payload["callbacks_count"] == 0
 
+
+def test_zero_raw_section_overlay(tmp_path):
+    # If a section has zero raw size, overlay detection does not treat headers as overlay
+    p = str(tmp_path / "zero_sec.exe")
+    from .conftest import build_pe
+    build_pe(p)
+
+    # Read bytes and patch zero raw size for .text
+    with open(p, "rb") as fh:
+        raw = bytearray(fh.read())
+    idx = raw.find(b".text\x00")
+    assert idx != -1
+    import struct
+    # SizeOfRawData (offset 16) and PointerToRawData (offset 20)
+    raw[idx + 16 : idx + 24] = struct.pack("<II", 0, 0)
+
+    # When file only contains headers (512 bytes), overlay should NOT be detected inside headers
+    p_headers_only = str(tmp_path / "headers_only.exe")
+    with open(p_headers_only, "wb") as fh:
+        fh.write(raw[:512])
+
+    overlay_none = core.get_overlay(p_headers_only)
+    assert overlay_none["present"] is False
+
+    # When file has bytes after headers (1024 bytes), overlay starts cleanly at 512
+    p_with_overlay = str(tmp_path / "with_overlay.exe")
+    with open(p_with_overlay, "wb") as fh:
+        fh.write(raw)
+
+    overlay_extra = core.get_overlay(p_with_overlay)
+    assert overlay_extra["present"] is True
+    assert overlay_extra["offset"] == 512
+    assert overlay_extra["size"] == 512
+
+
+def test_truncated_pe_overlay_detection(tmp_path):
+    p = str(tmp_path / "trunc.exe")
+    from .conftest import build_pe
+    build_pe(p)
+    with open(p, "rb") as fh:
+        raw = fh.read()
+    p_trunc = str(tmp_path / "trunc_short.exe")
+    with open(p_trunc, "wb") as fh:
+        fh.write(raw[:-50])
+    overlay = core.get_overlay(p_trunc)
+    assert overlay["present"] is False
+
+
+def test_corrupted_import_entries(imports_pe):
+    import unittest.mock
+    mock_entry = unittest.mock.Mock()
+    mock_entry.dll = b"CORRUPT.DLL"
+    mock_imp = unittest.mock.Mock()
+    mock_imp.name = None
+    mock_imp.ordinal = None
+    mock_imp.address = None
+    mock_entry.imports = [mock_imp]
+
+    mock_pe = unittest.mock.Mock()
+    mock_pe.DIRECTORY_ENTRY_IMPORT = [mock_entry]
+
+    with unittest.mock.patch.object(core, "load_pe", return_value=mock_pe):
+        results = core.get_imports(imports_pe)
+        assert len(results) == 1
+        assert results[0]["name"] == "unknown"
+        assert results[0]["address"] is None
+
+
+def test_corrupted_export_symbol_address(exports_pe):
+    import unittest.mock
+    mock_sym = unittest.mock.Mock()
+    mock_sym.name = b"ExportNoneAddr"
+    mock_sym.ordinal = 1
+    mock_sym.address = None
+    mock_sym.forwarder = None
+
+    mock_dir = unittest.mock.Mock()
+    mock_dir.name = b"test.dll"
+    mock_dir.symbols = [mock_sym]
+
+    mock_pe = unittest.mock.Mock()
+    mock_pe.DIRECTORY_ENTRY_EXPORT = mock_dir
+
+    with unittest.mock.patch.object(core, "load_pe", return_value=mock_pe):
+        data = core.get_exports(exports_pe)
+        assert len(data["exports"]) == 1
+        assert data["exports"][0]["rva"] is None
+
