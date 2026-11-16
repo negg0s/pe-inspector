@@ -158,7 +158,14 @@ def _decode_utf16(value):
 
 
 def _section_name(sec):
-    return _decode(sec.Name.split(b"\x00", 1)[0])
+    name = getattr(sec, "Name", b"")
+    if name is None:
+        return ""
+    if isinstance(name, str):
+        return name.split("\x00", 1)[0]
+    if isinstance(name, (bytes, bytearray)):
+        return _decode(name.split(b"\x00", 1)[0])
+    return str(name)
 
 
 def _file_hashes(path):
@@ -184,34 +191,37 @@ def _timestamp_utc(value):
 
 def _data_directory(pe, index):
     try:
+        if not isinstance(index, int) or index < 0:
+            return None
         return pe.OPTIONAL_HEADER.DATA_DIRECTORY[index]
-    except (AttributeError, IndexError):
+    except (AttributeError, IndexError, TypeError):
         return None
 
 
 def get_info(path):
     pe = load_pe(path)
-    fh = pe.FILE_HEADER
-    oh = pe.OPTIONAL_HEADER
+    fh = getattr(pe, "FILE_HEADER", None)
+    oh = getattr(pe, "OPTIONAL_HEADER", None)
     try:
         md5, sha256 = _file_hashes(path)
     except OSError:
         md5 = sha256 = None
+    machine = getattr(fh, "Machine", 0) if fh else 0
     return {
         "file": os.path.abspath(path),
         "size": os.path.getsize(path),
-        "machine": MACHINE_NAMES.get(fh.Machine, hex(fh.Machine)),
-        "machine_raw": hex(fh.Machine),
-        "number_of_sections": fh.NumberOfSections,
-        "timestamp": fh.TimeDateStamp,
-        "characteristics": hex(fh.Characteristics),
-        "entry_point": hex(oh.AddressOfEntryPoint),
-        "image_base": hex(oh.ImageBase),
-        "subsystem": SUBSYSTEM_NAMES.get(oh.Subsystem, str(oh.Subsystem)),
-        "subsystem_raw": oh.Subsystem,
-        "size_of_image": hex(oh.SizeOfImage),
-        "size_of_headers": hex(oh.SizeOfHeaders),
-        "number_of_rva_and_sizes": oh.NumberOfRvaAndSizes,
+        "machine": MACHINE_NAMES.get(machine, hex(machine)),
+        "machine_raw": hex(machine),
+        "number_of_sections": getattr(fh, "NumberOfSections", 0) if fh else 0,
+        "timestamp": getattr(fh, "TimeDateStamp", 0) if fh else 0,
+        "characteristics": hex(getattr(fh, "Characteristics", 0)) if fh else "0x0",
+        "entry_point": hex(getattr(oh, "AddressOfEntryPoint", 0)) if oh else "0x0",
+        "image_base": hex(getattr(oh, "ImageBase", 0)) if oh else "0x0",
+        "subsystem": SUBSYSTEM_NAMES.get(getattr(oh, "Subsystem", 0), str(getattr(oh, "Subsystem", 0))) if oh else "0",
+        "subsystem_raw": getattr(oh, "Subsystem", 0) if oh else 0,
+        "size_of_image": hex(getattr(oh, "SizeOfImage", 0)) if oh else "0x0",
+        "size_of_headers": hex(getattr(oh, "SizeOfHeaders", 0)) if oh else "0x0",
+        "number_of_rva_and_sizes": getattr(oh, "NumberOfRvaAndSizes", 0) if oh else 0,
         "md5": md5,
         "sha256": sha256,
     }
@@ -219,34 +229,42 @@ def get_info(path):
 
 def get_headers(path):
     pe = load_pe(path)
-    fh = pe.FILE_HEADER
-    oh = pe.OPTIONAL_HEADER
-    dll_flags = [name for bit, name in DLL_CHARACTERISTICS if oh.DllCharacteristics & bit]
-    stored = oh.CheckSum
-    computed = pe.generate_checksum()
+    fh = getattr(pe, "FILE_HEADER", None)
+    oh = getattr(pe, "OPTIONAL_HEADER", None)
+    dll_chars = getattr(oh, "DllCharacteristics", 0) if oh else 0
+    dll_flags = [name for bit, name in DLL_CHARACTERISTICS if dll_chars & bit]
+    stored = getattr(oh, "CheckSum", 0) if oh else 0
+    try:
+        computed = pe.generate_checksum()
+    except Exception:
+        computed = 0
+    machine = getattr(fh, "Machine", 0) if fh else 0
+    chars = getattr(fh, "Characteristics", 0) if fh else 0
+    timestamp = getattr(fh, "TimeDateStamp", 0) if fh else 0
+    subsystem = getattr(oh, "Subsystem", 0) if oh else 0
     return {
         "file": os.path.abspath(path),
         "size": os.path.getsize(path),
-        "machine": MACHINE_NAMES.get(fh.Machine, hex(fh.Machine)),
-        "machine_raw": hex(fh.Machine),
-        "is_dll": bool(fh.Characteristics & 0x2000),
-        "is_64bit": pe.PE_TYPE == pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS,
-        "subsystem": SUBSYSTEM_NAMES.get(oh.Subsystem, str(oh.Subsystem)),
-        "subsystem_raw": oh.Subsystem,
-        "dll_characteristics": hex(oh.DllCharacteristics),
+        "machine": MACHINE_NAMES.get(machine, hex(machine)),
+        "machine_raw": hex(machine),
+        "is_dll": bool(chars & 0x2000),
+        "is_64bit": getattr(pe, "PE_TYPE", None) == pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS,
+        "subsystem": SUBSYSTEM_NAMES.get(subsystem, str(subsystem)),
+        "subsystem_raw": subsystem,
+        "dll_characteristics": hex(dll_chars),
         "dll_characteristics_flags": dll_flags,
-        "compile_time": fh.TimeDateStamp,
-        "compile_time_utc": _timestamp_utc(fh.TimeDateStamp),
-        "entry_point": hex(oh.AddressOfEntryPoint),
-        "image_base": hex(oh.ImageBase),
+        "compile_time": timestamp,
+        "compile_time_utc": _timestamp_utc(timestamp),
+        "entry_point": hex(getattr(oh, "AddressOfEntryPoint", 0)) if oh else "0x0",
+        "image_base": hex(getattr(oh, "ImageBase", 0)) if oh else "0x0",
         "checksum_stored": hex(stored),
         "checksum_computed": hex(computed),
         "checksum_matches": stored == computed,
-        "number_of_sections": fh.NumberOfSections,
-        "size_of_image": hex(oh.SizeOfImage),
-        "size_of_headers": hex(oh.SizeOfHeaders),
-        "section_alignment": hex(oh.SectionAlignment),
-        "file_alignment": hex(oh.FileAlignment),
+        "number_of_sections": getattr(fh, "NumberOfSections", 0) if fh else 0,
+        "size_of_image": hex(getattr(oh, "SizeOfImage", 0)) if oh else "0x0",
+        "size_of_headers": hex(getattr(oh, "SizeOfHeaders", 0)) if oh else "0x0",
+        "section_alignment": hex(getattr(oh, "SectionAlignment", 0)) if oh else "0x0",
+        "file_alignment": hex(getattr(oh, "FileAlignment", 0)) if oh else "0x0",
     }
 
 
@@ -340,19 +358,27 @@ def get_exports(path):
     return result
 
 
-def _count_resource_leaves(entries):
+def _count_resource_leaves(entries, visited=None):
+    if visited is None:
+        visited = set()
     count = 0
     size = 0
     for entry in entries:
         data = getattr(entry, "data", None)
         if data is not None:
             count += 1
-            size += getattr(data.struct, "Size", 0)
+            size += getattr(getattr(data, "struct", None), "Size", 0)
         directory = getattr(entry, "directory", None)
         if directory is not None:
-            child_count, child_size = _count_resource_leaves(directory.entries)
-            count += child_count
-            size += child_size
+            dir_id = id(directory)
+            if dir_id not in visited:
+                visited.add(dir_id)
+                child_count, child_size = _count_resource_leaves(
+                    getattr(directory, "entries", []) or [],
+                    visited
+                )
+                count += child_count
+                size += child_size
     return count, size
 
 
@@ -360,24 +386,27 @@ def get_resources(path):
     pe = load_pe(path)
     root = getattr(pe, "DIRECTORY_ENTRY_RESOURCE", None)
     result = {"total": 0, "types": []}
-    if root is None:
+    if root is None or not hasattr(root, "entries"):
         return result
     total = 0
-    for entry in root.entries:
+    for entry in getattr(root, "entries", []) or []:
         count = 0
         size = 0
         if getattr(entry, "directory", None) is not None:
-            count, size = _count_resource_leaves(entry.directory.entries)
+            count, size = _count_resource_leaves(getattr(entry.directory, "entries", []) or [])
+        type_id = getattr(entry, "id", None)
+        if type_id is None:
+            continue
         result["types"].append(
             {
-                "id": entry.id,
-                "type": pefile.RESOURCE_TYPE.get(entry.id, "UNKNOWN"),
+                "id": type_id,
+                "type": pefile.RESOURCE_TYPE.get(type_id, "UNKNOWN"),
                 "count": count,
                 "size": size,
             }
         )
         total += count
-    result["types"].sort(key=lambda item: item["id"])
+    result["types"].sort(key=lambda item: item["id"] if isinstance(item["id"], int) else 0)
     result["total"] = total
     return result
 
@@ -460,13 +489,32 @@ def get_overlay(path):
             "contains_signature": False,
         }
 
-    headers_end = getattr(pe.OPTIONAL_HEADER, "SizeOfHeaders", 0) if hasattr(pe, "OPTIONAL_HEADER") else 0
+    opt = getattr(pe, "OPTIONAL_HEADER", None)
+    headers_end = getattr(opt, "SizeOfHeaders", 0) if opt else 0
+    if not isinstance(headers_end, int) or headers_end < 0 or headers_end > size:
+        return {
+            "present": False,
+            "offset": None,
+            "size": 0,
+            "percent": 0.0,
+            "contains_signature": False,
+        }
     expected_end = headers_end
 
     for sec in getattr(pe, "sections", []):
         raw_size = getattr(sec, "SizeOfRawData", 0)
         raw_offset = getattr(sec, "PointerToRawData", 0)
-        if raw_size > 0 and raw_offset > 0:
+        if not isinstance(raw_size, int) or not isinstance(raw_offset, int):
+            continue
+        if raw_offset < 0 or raw_size < 0:
+            return {
+                "present": False,
+                "offset": None,
+                "size": 0,
+                "percent": 0.0,
+                "contains_signature": False,
+            }
+        if raw_size > 0 or raw_offset > 0:
             sec_end = raw_offset + raw_size
             if sec_end > size or raw_offset > size:
                 return {
@@ -484,7 +532,7 @@ def get_overlay(path):
     except Exception:
         pe_offset = None
 
-    if pe_offset is not None and pe_offset >= expected_end:
+    if pe_offset is not None and isinstance(pe_offset, int) and pe_offset >= expected_end:
         offset = pe_offset
     elif size > expected_end:
         offset = expected_end
@@ -500,11 +548,16 @@ def get_overlay(path):
             "contains_signature": False,
         }
     security = _data_directory(pe, IMAGE_DIRECTORY_ENTRY_SECURITY)
+    sec_va = getattr(security, "VirtualAddress", 0) if security else 0
+    sec_size = getattr(security, "Size", 0) if security else 0
     contains_signature = bool(
         security
-        and security.VirtualAddress
-        and security.Size
-        and offset <= security.VirtualAddress < size
+        and isinstance(sec_va, int)
+        and isinstance(sec_size, int)
+        and sec_va > 0
+        and sec_size >= 8
+        and offset <= sec_va < size
+        and sec_va + sec_size <= size
     )
     overlay_size = size - offset
     return {
@@ -530,27 +583,32 @@ def get_signature(path):
     }
     security = _data_directory(pe, IMAGE_DIRECTORY_ENTRY_SECURITY)
     file_size = os.path.getsize(path)
+    sec_va = getattr(security, "VirtualAddress", 0) if security else 0
+    sec_size = getattr(security, "Size", 0) if security else 0
     if (
         security is None
-        or not security.VirtualAddress
-        or security.Size < 8
-        or security.VirtualAddress > file_size
-        or security.Size > file_size - security.VirtualAddress
+        or not isinstance(sec_va, int)
+        or not isinstance(sec_size, int)
+        or sec_va <= 0
+        or sec_size < 8
+        or sec_va >= file_size
+        or sec_va + sec_size > file_size
     ):
         return result
-    result["present"] = True
-    result["offset"] = security.VirtualAddress
-    result["size"] = security.Size
-    with open(path, "rb") as fh:
-        fh.seek(security.VirtualAddress)
-        header = fh.read(8)
+    header = b""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(sec_va)
+            header = fh.read(8)
+    except (OSError, ValueError):
+        return result
     if len(header) == 8:
         length, revision, cert_type = struct.unpack("<IHH", header)
-        if length < 8 or length > security.Size:
-            result["present"] = False
-            result["offset"] = None
-            result["size"] = 0
+        if length < 8 or length > sec_size:
             return result
+        result["present"] = True
+        result["offset"] = sec_va
+        result["size"] = sec_size
         result["certificate_length"] = length
         result["revision"] = hex(revision)
         result["certificate_type"] = CERTIFICATE_TYPES.get(cert_type, hex(cert_type))
@@ -559,14 +617,14 @@ def get_signature(path):
 
 def get_mitigations(path):
     pe = load_pe(path)
-    oh = pe.OPTIONAL_HEADER
-    fh = pe.FILE_HEADER
-    dll_chars = getattr(oh, "DllCharacteristics", 0)
+    oh = getattr(pe, "OPTIONAL_HEADER", None)
+    fh = getattr(pe, "FILE_HEADER", None)
+    dll_chars = getattr(oh, "DllCharacteristics", 0) if oh else 0
 
-    is_64bit = pe.PE_TYPE == pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS
+    is_64bit = getattr(pe, "PE_TYPE", None) == pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS
     aslr = bool(dll_chars & 0x0040)
     high_entropy_va = bool(dll_chars & 0x0020) if is_64bit else False
-    relocs_stripped = bool(fh.Characteristics & 0x0001)
+    relocs_stripped = bool(fh.Characteristics & 0x0001) if fh else False
 
     dep = bool(dll_chars & 0x0100)
     guard_cf = bool(dll_chars & 0x4000)
@@ -692,7 +750,8 @@ def scan(path):
             }
         )
 
-    dll_characteristics = pe.OPTIONAL_HEADER.DllCharacteristics
+    opt = getattr(pe, "OPTIONAL_HEADER", None)
+    dll_characteristics = getattr(opt, "DllCharacteristics", 0) if opt else 0
     if not dll_characteristics & DLLCHAR_DYNAMIC_BASE:
         reasons.append(
             {
@@ -752,11 +811,11 @@ def generate_report(path, fmt="text"):
     explanations = {
         "wx_section": lambda reason: (
             "Section %s is writable and executable, so it can be changed while "
-            "also containing code. Some legitimate programs do this." % reason["detail"].split(" ")[1]
+            "also containing code. Some legitimate programs do this." % (reason["detail"].split(" ")[1] if len(reason["detail"].split(" ")) > 1 else "unknown")
         ),
         "high_entropy": lambda reason: (
             "%s is unusually dense or encoded. Compression and installers can "
-            "also cause this." % reason["detail"].split(" ")[1]
+            "also cause this." % (reason["detail"].split(" ")[1] if len(reason["detail"].split(" ")) > 1 else "Section")
         ),
         "suspicious_imports": lambda reason: (
             "The program uses APIs that can be used to inspect or control other "

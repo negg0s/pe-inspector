@@ -502,3 +502,82 @@ def test_corrupted_export_symbol_address(exports_pe):
         assert len(data["exports"]) == 1
         assert data["exports"][0]["rva"] is None
 
+
+def test_get_signature_handles_negative_offset(minimal_pe):
+    import unittest.mock
+    mock_sec = unittest.mock.Mock()
+    mock_sec.VirtualAddress = -10
+    mock_sec.Size = 100
+    mock_pe = unittest.mock.Mock()
+    mock_pe.OPTIONAL_HEADER.DATA_DIRECTORY = [None, None, None, None, mock_sec]
+    with unittest.mock.patch.object(core, "load_pe", return_value=mock_pe):
+        sig = core.get_signature(minimal_pe)
+        assert sig["present"] is False
+        assert sig["offset"] is None
+
+
+def test_get_signature_handles_truncated_header(minimal_pe):
+    import unittest.mock
+    mock_sec = unittest.mock.Mock()
+    file_size = os.path.getsize(minimal_pe)
+    mock_sec.VirtualAddress = file_size - 4
+    mock_sec.Size = 16
+    mock_pe = unittest.mock.Mock()
+    mock_pe.OPTIONAL_HEADER.DATA_DIRECTORY = [None, None, None, None, mock_sec]
+    with unittest.mock.patch.object(core, "load_pe", return_value=mock_pe):
+        sig = core.get_signature(minimal_pe)
+        assert sig["present"] is False
+
+
+def test_get_overlay_handles_corrupted_size_of_headers(minimal_pe):
+    import unittest.mock
+    mock_pe = unittest.mock.Mock()
+    mock_pe.OPTIONAL_HEADER.SizeOfHeaders = 999999999
+    mock_pe.sections = []
+    with unittest.mock.patch.object(core, "load_pe", return_value=mock_pe):
+        overlay = core.get_overlay(minimal_pe)
+        assert overlay["present"] is False
+
+
+def test_get_overlay_handles_negative_section_offsets(minimal_pe):
+    import unittest.mock
+    mock_sec = unittest.mock.Mock()
+    mock_sec.SizeOfRawData = -10
+    mock_sec.PointerToRawData = -5
+    mock_pe = unittest.mock.Mock()
+    mock_pe.OPTIONAL_HEADER.SizeOfHeaders = 512
+    mock_pe.sections = [mock_sec]
+    with unittest.mock.patch.object(core, "load_pe", return_value=mock_pe):
+        overlay = core.get_overlay(minimal_pe)
+        assert overlay["present"] is False
+
+
+def test_resource_leaves_cycle_handling():
+    import unittest.mock
+    dir1 = unittest.mock.Mock()
+    dir2 = unittest.mock.Mock()
+    entry1 = unittest.mock.Mock()
+    entry1.data = None
+    entry1.directory = dir2
+    entry2 = unittest.mock.Mock()
+    entry2.data = None
+    entry2.directory = dir1
+    dir1.entries = [entry1]
+    dir2.entries = [entry2]
+
+    count, size = core._count_resource_leaves([entry1])
+    assert count == 0
+    assert size == 0
+
+
+def test_section_name_handling_malformed():
+    import unittest.mock
+    mock_sec_str = unittest.mock.Mock()
+    mock_sec_str.Name = "test_sec\x00extra"
+    assert core._section_name(mock_sec_str) == "test_sec"
+
+    mock_sec_none = unittest.mock.Mock()
+    mock_sec_none.Name = None
+    assert core._section_name(mock_sec_none) == ""
+
+
